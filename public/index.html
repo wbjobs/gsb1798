@@ -1,0 +1,102 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>优先级资源加载器</title>
+  <link rel="stylesheet" href="/css/styles.css">
+</head>
+<body>
+  <header class="hero">
+    <div>
+      <p class="eyebrow">Fetch + Web Worker + PerformanceObserver</p>
+      <h1>图片、脚本、字体优先级加载</h1>
+      <p>并发限制 2；支持超时降级、指数退避重试、异常链路和资源时序观测。</p>
+    </div>
+    <div class="actions">
+      <button id="start" class="primary">开始加载</button>
+      <button id="add-low">追加低优先级图片</button>
+    </div>
+  </header>
+
+  <main>
+    <section class="panel status-panel">
+      <div><span>待执行</span><strong id="pending">0</strong></div>
+      <div><span>执行中</span><strong id="active">0</strong></div>
+      <div><span>成功</span><strong id="success">0</strong></div>
+      <div><span>降级</span><strong id="degraded">0</strong></div>
+      <div><span>失败</span><strong id="failed">0</strong></div>
+    </section>
+
+    <section class="grid">
+      <article class="card" data-priority="critical">
+        <div class="card-head"><span>Critical</span><b>关键图片</b></div>
+        <img id="critical-image" alt="关键图片">
+      </article>
+      <article class="card" data-priority="critical">
+        <div class="card-head"><span>Critical</span><b>关键脚本</b></div>
+        <pre id="critical-script">等待脚本加载</pre>
+      </article>
+      <article class="card" data-priority="critical">
+        <div class="card-head"><span>Critical</span><b>关键字体</b></div>
+        <p id="critical-font" class="font-sample">Custom Font 123</p>
+      </article>
+      <article class="card" data-priority="high">
+        <div class="card-head"><span>High</span><b>高优先级图片</b></div>
+        <img id="high-image" alt="高优先级图片">
+      </article>
+      <article class="card" data-priority="normal">
+        <div class="card-head"><span>Normal</span><b>抖动资源（重试）</b></div>
+        <pre id="flaky-resource">等待加载</pre>
+      </article>
+      <article class="card" data-priority="normal">
+        <div class="card-head"><span>Normal</span><b>500 脚本（重试后降级）</b></div>
+        <pre id="failing-script">等待脚本加载</pre>
+      </article>
+      <article class="card" data-priority="normal">
+        <div class="card-head"><span>Normal</span><b>慢图片（500ms 超时）</b></div>
+        <img id="timeout-image" alt="超时图片">
+      </article>
+      <article class="card" data-priority="low">
+        <div class="card-head"><span>Low</span><b>低优先级字体</b></div>
+        <p id="low-font" class="font-sample">Low Priority Font</p>
+      </article>
+      <article class="card" data-priority="low">
+        <div class="card-head"><span>Low</span><b>动态追加位</b></div>
+        <img id="dynamic-image" alt="动态图片">
+      </article>
+    </section>
+
+    <section class="two-column">
+      <article class="panel">
+        <h2>事件与异常链路</h2>
+        <ol id="events" class="events"></ol>
+      </article>
+      <article class="panel">
+        <h2>加载指标</h2>
+        <div class="table-wrap">
+          <table>
+            <thead>
+              <tr><th>资源</th><th>优先级</th><th>状态</th><th>尝试</th><th>队列</th><th>总耗时</th></tr>
+            </thead>
+            <tbody id="metrics"></tbody>
+          </table>
+        </div>
+      </article>
+    </section>
+
+    <section class="two-column">
+      <article class="panel">
+        <h2>PerformanceObserver 资源时序</h2>
+        <pre id="timing" class="timing">暂无数据</pre>
+      </article>
+      <article class="panel">
+        <h2>服务端观测并发</h2>
+        <pre id="server-concurrency" class="timing">暂无数据</pre>
+      </article>
+    </section>
+  </main>
+
+  <script type="module" src="/js/app.js"></script>
+</body>
+</html>
