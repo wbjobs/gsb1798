@@ -1,0 +1,243 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Priority Resource Loader — demo</title>
+<style>
+  :root { color-scheme: light; }
+  body { font: 14px/1.5 system-ui, -apple-system, Segoe UI, Roboto, sans-serif; margin: 0; background: #f8fafc; color: #0f172a; }
+  header { padding: 20px 28px; background: #0f172a; color: #fff; }
+  header h1 { margin: 0 0 4px; font-size: 20px; }
+  header p { margin: 0; color: #94a3b8; font-size: 13px; }
+  main { display: grid; grid-template-columns: 380px 1fr; gap: 20px; padding: 20px 28px; }
+  .card { background: #fff; border: 1px solid #e2e8f0; border-radius: 12px; padding: 16px 18px; margin-bottom: 16px; }
+  .card h2 { margin: 0 0 10px; font-size: 14px; text-transform: uppercase; letter-spacing: .06em; color: #64748b; }
+  button { font: inherit; border: 0; border-radius: 8px; padding: 8px 12px; margin: 0 6px 8px 0; background: #4f46e5; color: #fff; cursor: pointer; }
+  button.secondary { background: #e2e8f0; color: #0f172a; }
+  button:disabled { opacity: .5; cursor: default; }
+  label { display: inline-flex; align-items: center; gap: 6px; margin-right: 12px; font-size: 13px; color: #334155; }
+  select, input[type=number] { font: inherit; padding: 4px 6px; border: 1px solid #cbd5e1; border-radius: 6px; }
+  #output img { max-width: 240px; border-radius: 8px; border: 1px solid #e2e8f0; margin: 6px 8px 6px 0; }
+  .row { display: flex; align-items: center; gap: 10px; margin: 6px 0; font-size: 13px; }
+  .badge { font-size: 11px; padding: 1px 7px; border-radius: 999px; font-weight: 600; }
+  .b-critical { background: #fee2e2; color: #b91c1c; }
+  .b-high { background: #ffedd5; color: #c2410c; }
+  .b-normal { background: #dbeafe; color: #1d4ed8; }
+  .b-low { background: #f1f5f9; color: #475569; }
+  .b-ok { background: #dcfce7; color: #15803d; }
+  .b-fallback { background: #fef9c3; color: #a16207; }
+  .b-fail { background: #fee2e2; color: #b91c1c; }
+  #log { height: 300px; overflow: auto; font: 11px/1.5 ui-monospace, SFMono-Regular, Menlo, monospace; background: #0f172a; color: #cbd5e1; border-radius: 8px; padding: 10px; }
+  #log .t { color: #64748b; }
+  #log .ev-load { color: #4ade80; }
+  #log .ev-retry { color: #facc15; }
+  #log .ev-fallback { color: #fb923c; }
+  #log .ev-fail { color: #f87171; }
+  #log .ev-enqueue { color: #93c5fd; }
+  #log .ev-cancel, #log .ev-degrade { color: #f472b6; }
+  .stat { display: inline-block; margin-right: 18px; font-size: 13px; }
+  .stat b { font-size: 18px; display: block; }
+  .font-demo { font-size: 26px; padding: 8px 0; }
+  code { background: #f1f5f9; padding: 1px 5px; border-radius: 4px; }
+</style>
+</head>
+<body>
+<header>
+  <h1>Priority Resource Loader</h1>
+  <p>Priority queue · concurrency limit · timeout · degradation · retry · Web Worker · PerformanceObserver</p>
+</header>
+<main>
+  <section>
+    <div class="card">
+      <h2>Configuration</h2>
+      <label>concurrency
+        <input id="concurrency" type="number" min="1" max="10" value="3" style="width:64px">
+      </label>
+      <label><input id="useWorker" type="checkbox" checked> Web Workers (auto-degrades on failure)</label>
+      <div class="row" style="margin-top:8px">
+        <button id="run">Load burst of 8</button>
+        <button id="runChaos" class="secondary">Chaos: flaky / slow / 404</button>
+        <button id="cancelAll" class="secondary">Cancel queued</button>
+      </div>
+    </div>
+    <div class="card">
+      <h2>Stats</h2>
+      <div class="stat"><b id="s-loaded">0</b>loaded</div>
+      <div class="stat"><b id="s-fallback">0</b>fallback</div>
+      <div class="stat"><b id="s-failed">0</b>failed</div>
+      <div class="stat"><b id="s-retries">0</b>retries</div>
+      <div class="stat"><b id="s-queued">0</b>queued</div>
+      <div class="stat"><b id="s-active">0</b>in-flight</div>
+      <div class="row" style="margin-top:8px">
+        <code>total</code> &nbsp;<span id="s-total">-</span>
+        &nbsp;<code>fetch p95</code> &nbsp;<span id="s-p95">-</span>
+      </div>
+    </div>
+    <div class="card">
+      <h2>Resources</h2>
+      <div id="output"></div>
+    </div>
+  </section>
+  <section>
+    <div class="card">
+      <h2>Event / exception-chain log</h2>
+      <div id="log"></div>
+    </div>
+  </section>
+</main>
+
+<script type="module">
+  import { ResourceLoader, MetricsCollector } from '/src/index.js';
+
+  const $ = (id) => document.getElementById(id);
+  const logEl = $('log');
+  const counters = { loaded: 0, fallback: 0, failed: 0, canceled: 0, retries: 0 };
+  let metrics;
+
+  function log(type, message, chain) {
+    const line = document.createElement('div');
+    line.className = `ev-${type}`;
+    line.innerHTML = `<span class="t">${performance.now().toFixed(0).padStart(6)}ms</span> ${type.padEnd(9)} ${message}`;
+    if (chain?.length) {
+      const detail = document.createElement('div');
+      detail.className = 't';
+      detail.style.paddingLeft = '96px';
+      detail.textContent = '  └ ' + chain.map((c) => `${c.code || c.name}${c.status ? `(${c.status})` : ''}: ${c.message}`).join(' → ');
+      line.appendChild(detail);
+    }
+    logEl.appendChild(line);
+    logEl.scrollTop = logEl.scrollHeight;
+  }
+
+  function refreshStats() {
+    const s = loader.stats();
+    $('s-loaded').textContent = counters.loaded;
+    $('s-fallback').textContent = counters.fallback;
+    $('s-failed').textContent = counters.failed;
+    $('s-retries').textContent = counters.retries;
+    $('s-queued').textContent = s.queued;
+    $('s-active').textContent = s.active;
+    const fmt = (v) => v == null ? '-' : `${v.avg.toFixed(0)} avg / ${v.max.toFixed(0)} max ms (n=${v.count})`;
+    $('s-total').textContent = fmt(metrics.summary('total'));
+    const p95 = metrics.summary('fetch');
+    $('s-p95').textContent = p95 ? `${p95.p95.toFixed(0)} ms` : '-';
+  }
+
+  let loader;
+  function createLoader() {
+    loader?.dispose();
+    metrics = new MetricsCollector();
+    loader = new ResourceLoader({
+      workerUrl: '/src/worker.js',
+      useWorker: $('useWorker').checked,
+      workerPoolSize: 2,
+      concurrency: Number($('concurrency').value),
+      timeout: 1200,
+      retries: 2,
+      retryDelay: 200,
+      metrics,
+    });
+    for (const type of ['enqueue', 'load', 'retry', 'fallback', 'fail', 'cancel', 'degrade', 'drain']) {
+      loader.addEventListener(type, (e) => {
+        const d = e.detail || {};
+        if (type === 'load') counters.loaded++;
+        if (type === 'fallback') counters.fallback++;
+        if (type === 'fail') counters.failed++;
+        if (type === 'cancel') counters.canceled++;
+        if (type === 'retry') counters.retries++;
+        log(type, d.id ? `${d.id} ${d.url || ''} ${d.attempts ? 'attempts=' + d.attempts : ''} ${d.nextAttempt ? '→ attempt ' + (d.nextAttempt + 1) : ''}`.trim() : JSON.stringify(d).slice(0, 120), d.error || d.reason);
+        refreshStats();
+      });
+    }
+    refreshStats();
+  }
+
+  createLoader();
+  const badge = (p) => `<span class="badge b-${p}">${p}</span>`;
+  function addRow(spec, state, extra = '') {
+    const out = $('output');
+    const row = document.createElement('div');
+    row.className = 'row';
+    row.id = `row-${spec.id}`;
+    row.innerHTML = `${badge(spec.priority || 'normal')} <b>${spec.id}</b> <span class="t" style="color:#64748b">${spec.type}</span> <span id="state-${spec.id}">${state}</span> ${extra}`;
+    out.appendChild(row);
+    return row;
+  }
+  function setState(id, state, cls) {
+    const el = $(`state-${id}`);
+    if (!el) return;
+    el.innerHTML = `<span class="badge ${cls}">${state}</span>`;
+  }
+
+  const burst = [
+    { id: 'hero', type: 'image', url: '/demo/assets/hero.svg', priority: 'critical' },
+    { id: 'font', type: 'font', family: 'DemoSerif', url: '/font/DejaVuSerif.ttf', priority: 'critical' },
+    { id: 'tracker', type: 'script', url: '/api/flaky/tracker.js?fail=1&retryAfter=200', priority: 'high', inline: false },
+    { id: 'thumb-a', type: 'image', url: '/demo/assets/thumb.svg', priority: 'normal', fallback: true },
+    { id: 'thumb-b', type: 'image', url: '/demo/assets/thumb.svg', priority: 'normal', fallback: true },
+    { id: 'slow-banner', type: 'image', url: '/api/slow/banner.svg?delay=3000', priority: 'low', fallback: true, timeout: 700, retries: 1 },
+    { id: 'missing-img', type: 'image', url: '/api/missing/x.png', priority: 'low', fallback: true, retries: 0 },
+    { id: 'deferred', type: 'image', url: '/demo/assets/thumb.svg', priority: 'low', fallback: true },
+  ];
+
+  async function run(specs) {
+    $('output').innerHTML = '';
+    Object.assign(counters, { loaded: 0, fallback: 0, failed: 0, canceled: 0, retries: 0 });
+    createLoader();
+    for (const spec of specs) addRow(spec, 'queued');
+
+    const results = await Promise.allSettled(specs.map((spec) => loader.load(spec)));
+    for (let i = 0; i < specs.length; i++) {
+      const spec = specs[i];
+      const result = results[i];
+      const row = $(`row-${spec.id}`);
+      if (result.status === 'fulfilled') {
+        const r = result.value;
+        if (r.degraded) {
+          setState(spec.id, 'fallback', 'b-fallback');
+        } else {
+          setState(spec.id, 'loaded', 'b-ok');
+        }
+        if (r.kind === 'image') {
+          const img = document.createElement('img');
+          img.src = r.url;
+          img.alt = spec.id;
+          img.style.maxWidth = '120px';
+          row.appendChild(img);
+        } else if (r.kind === 'font') {
+          const span = document.createElement('span');
+          span.className = 'font-demo';
+          span.style.fontFamily = r.degraded ? r.stack : `${spec.family}, ${r.style || 'sans-serif'}`;
+          span.textContent = r.degraded ? 'System font fallback Aa' : 'Webfont loaded Aa';
+          row.appendChild(span);
+        } else if (r.kind === 'script') {
+          const tag = document.createElement('code');
+          tag.textContent = r.degraded ? 'script skipped' : (r.text !== null ? 'script ready (not inlined)' : 'script executed');
+          row.appendChild(tag);
+        }
+      } else {
+        setState(spec.id, 'failed', 'b-fail');
+      }
+    }
+    refreshStats();
+  }
+
+  $('run').onclick = () => run(burst);
+  $('runChaos').onclick = () => run([
+    { id: 'flaky-2', type: 'script', url: '/api/flaky/chaos.js?fail=2&retryAfter=300', priority: 'high', inline: false },
+    { id: 'slow-1200', type: 'image', url: '/api/slow/s.svg?delay=5000', priority: 'normal', fallback: true, timeout: 500, retries: 2 },
+    { id: 'missing', type: 'font', family: 'X', url: '/api/missing/x.woff2', priority: 'low', fallback: 'Georgia, serif' },
+  ]);
+  $('cancelAll').onclick = () => {
+    // Cancel everything still queued (in-flight jobs are aborted too).
+    for (const id of [...Array(8).keys()].map((i) => burst[i]?.id)) {
+      if (id) loader.cancel(id);
+    }
+  };
+  $('concurrency').onchange = createLoader;
+  $('useWorker').onchange = createLoader;
+  setInterval(refreshStats, 250);
+</script>
+</body>
+</html>

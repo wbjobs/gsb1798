@@ -1,0 +1,12 @@
+{
+  "name": "priority-resource-loader",
+  "version": "1.0.0",
+  "description": "Priority-based loader for images, scripts and fonts: concurrency limit, timeout, fallback, retry, Web Worker fetch and PerformanceObserver metrics.",
+  "type": "module",
+  "main": "src/index.js",
+  "scripts": {
+    "test": "node --test test/*.test.js",
+    "demo": "node demo/server.js"
+  },
+  "license": "MIT"
+}
